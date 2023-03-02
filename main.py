@@ -3,35 +3,57 @@ import random
 from typing import Dict, List
 import functools
 
+# This stores the raw colors
 raw_colors = []
 color_count: Dict[str, int] = dict()
 with open("python_class_question.html", 'r') as file:
+    # We go line by line
     for line in file:
-        x = re.search(r"<td>.+</td>", line)
-        if x:
-            (start, stop) = x.span()
+        # We use regular expression to get where the table data (<td>) is stored on the line
+        table_data = re.search(r"<td>.+</td>", line)
+        if table_data:
+            # Find the span of the match
+            (start, stop) = table_data.span()
 
             # To remove the <td> and </td> respectively
             start += 4
             stop -= 5
 
             # Check it's a day that is stored
+            # If it is, we skip it
             if stop - start < 20:
                 continue
 
-            for value in line[start:stop].split(", "):
-                raw_colors.append(value)
-                if value in color_count:
-                    color_count[value] += 1
+            # Split all the colors and then add them to the `color_count` dictionary
+            # and then update the count if it repeats
+            for color in line[start:stop].split(", "):
+                raw_colors.append(color)
+                if color in color_count:
+                    color_count[color] += 1
                 else:
-                    color_count[value] = 1
+                    color_count[color] = 1
 
 
+# Since the data is categorical and not numerical
+# The mean should be the color that is worn the most on average
+# So in that case, it can be seen as the color that has the highest probabilty of being worn
+# So we calculate that probability for every color and then return the color with the highest one
 def find_mean():
     values = color_count.values()
-    return sum([index * value for index, value in enumerate(values)]) / sum(values)
+    # Calculate the probabiltiy of a person wearing the color in a week
+    prob_colors = [value / len(raw_colors) for value in values]
+
+    # Get the index of the maximum probability
+    max_index = prob_colors.index(max(prob_colors))
+
+    # Get the color that corresponds to the maximum probability
+    result = list(color_count.keys())[max_index]
+
+    # Return that as the mean
+    return result
 
 
+# This function finds the color that was worn the maximum number of times
 def find_max():
     maximum = ("", 0)
     for key in color_count:
@@ -41,60 +63,93 @@ def find_max():
     return maximum[0]
 
 
+# This finds the middle element to the sorted array of raw_colors
 def find_median():
-    return raw_colors[int(len(raw_colors)/2)]
+    sorted_array = sorted(raw_colors)
+    return sorted_array[int(len(sorted_array) / 2)]
 
 
+# To find the varaiance we have to calculate how far each color is from the mean,
+# square it and then divide it by the total number of colors
+# Since the colors don't have numerical values, we try to sort the color_count dictionary
+# and then try to find the how far the index of the mean is from the index of a particular color
 def find_variance():
+    # Sort the map and create a new map
+    sorted_colors = {color: frequency for color, frequency in sorted(
+        color_count.items(), key=lambda x: x[0])}
+
+    # Get the mean
     mean = find_mean()
-    return 1/len(raw_colors) * sum([value * ((index - mean)**2) for index, value in enumerate(color_count.values())])
+
+    # Get a list of all the keys in the map
+    keys = list(sorted_colors.keys())
+    # Find which index the mean is in
+    mean_index = keys.index(mean)
+
+    # Create an accumulator
+    sum_distance = 0
+    for index, key in enumerate(keys):
+        # Calculate the distance from the mean, square it and then multiply it by frequency
+        sum_distance += ((index - mean_index)**2) * sorted_colors[key]
+
+    # Calculate the variance and then return it
+    return sum_distance/len(raw_colors)
 
 
+# To find the probability that someone would wear red would be
+# just taking the frequency of red shirts and dividing it by the total frequncy of all shirts
 def prob_red():
-    print(color_count["RED"]/len(raw_colors))
+    return color_count["RED"]/len(raw_colors)
 
 
+# This function gets a connection to the Postgres database and then returns it
+# It loads the information needed from the a .env file
 def get_connection():
+    from dotenv import load_dotenv, find_dotenv
     from os.path import exists
-    if not exists(".env"):
+    dotenv_path = find_dotenv()
+    if not exists(dotenv_path):
         print("Please create a .env file with the following variables")
         print("DATABASE, USER, PASSWORD, HOST and PORT")
         return False
 
-    from dotenv import load_dotenv, find_dotenv
     import os
     import psycopg2
 
-    load_dotenv(find_dotenv())
+    load_dotenv(dotenv_path)
 
     databse = os.environ.get("DATABASE")
     user = os.environ.get("USER")
     password = os.environ.get("PASSWORD")
     host = os.environ.get("HOST")
     port = os.environ.get("PORT")
-
     try:
         return psycopg2.connect(
-            databse=databse,
+            database=databse,
             user=user,
             password=password,
             host=host,
             port=port
         )
-    except:
+    except Exception as e:
+        print("Error occured", e)
         print("Check if the following variables are defined in the .env file")
         print("DATABASE, USER, PASSWORD, HOST and PORT")
         return False
 
 
+# This loads the color data into a Postgres database
+# It saves it in a table called `color_count`
 def load_into_postgres():
     connection = get_connection()
     if not connection:
         print("could not create the connection")
         return
     try:
+        # Get a cursor
         cursor = connection.cursor()
 
+        # Create the table if it does not exist
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS color_count (
                 color TEXT PRIMARY KEY,
@@ -102,18 +157,24 @@ def load_into_postgres():
             );
         """)
 
-        sql = "INSERT INTO color_count (color, frequency) VALUES (%s, %s)"
-        cursor.execute(sql, color_count.items())
+        # Insert all the colors in the color_count dictionary into the table
+        sql = "INSERT INTO color_count (color, frequency) VALUES (%s, %s);"
+        colors = list(map(lambda x: (x[0], str(x[1])), color_count.items()))
+        for color, frequency in colors:
+            cursor.execute(sql, (color, frequency,),)
 
-        cursor.commit()
+        connection.commit()
 
         cursor.close()
-    except e:
+    except Exception as e:
         print("Error Occured:", e)
     finally:
         connection.close()
 
 
+# This is a recursive implementation of linear search
+# Linear search just goes from index to index checking if the target value is that
+# If it is, it then returns the index
 def linear_search(array, target, index=0):
     if index >= len(array):
         return -1
@@ -122,25 +183,36 @@ def linear_search(array, target, index=0):
     return index
 
 
+# This function asks the user for the numbers that are meant to be in a list and then
+# performs linear search on it
 def list_of_numbers():
     numbers = []
     length = int(input("Enter how many numbers you want: "))
+
+    # Get all the numbers from the user
     for i in range(length):
         number = int(input(f"Enter number {i + 1}: "))
         numbers.append(number)
     print()
+
     target = int(input("Enter the number that you want to search for: "))
     index = linear_search(numbers, target)
     print(f"The index of {target} is {index}")
 
 
+# This function generates a number that have 4 digits that have a random number of 1s and 0s
 def random_1_or_0():
-    result = 0
-    for power in range(3, -1, -1):
-        result += random.choice([0, 1]) * (10 ** power)
-    return result
+    result_str = ""
+    for _ in range(4):
+        result_str += random.choice(["0", "1"])
+
+    print("The resulting string is", result_str)
+
+    return int(result_str)
 
 
+# Recursive implementation of the Fibonnacci function
+# We use a cache so that we don't have to recompute any values that we have already calculated
 def fib(n, cache):
     if n in cache:
         return cache[n]
@@ -148,6 +220,8 @@ def fib(n, cache):
     return cache[n]
 
 
+# This finds the sum of the first 50 fibonnaci numbers
+# The plan is to fill up the cache with those numbers and then find the sum of the values
 def sum_of_fib():
     cache = {0: 0, 1: 1}
     # To fill the cache up with 50 values
@@ -155,6 +229,7 @@ def sum_of_fib():
     return sum(cache.values())
 
 
+# Simple UI for selecting a question to solve
 def main():
     print("Welcome to the challenge solution for the Bincom Test\n")
     while True:
@@ -167,8 +242,7 @@ def main():
         match question_number:
             case 1:
                 mean = find_mean()
-                print("The mean color is", list(
-                    color_count.values())[int(mean)])
+                print("The mean color is", mean)
             case 2:
                 print("The color that was worn the most is", find_max())
             case 3:
@@ -180,10 +254,11 @@ def main():
             case 6:
                 print("Loading data into the postgres database")
                 load_into_postgres()
+                print("Done loading datat into the postgres database")
             case 7:
                 list_of_numbers()
             case 8:
-                print("The random number is", random_1_or_0())
+                print("So therefore the random number is", random_1_or_0())
             case 9:
                 print("The sum of the first 50 fibbonaci number is", sum_of_fib())
             case _:
